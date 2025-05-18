@@ -6,47 +6,86 @@
 #define TURN_RIGHT 2
 #define TURN_LEFT 3
 
-#define FRONT 120
-#define TO_RIGHT 30
-#define TO_LEFT 210
+struct Direction_servo_motor {
+    const char* name;
+    int angle;
+};
 
-Servo myservo;                              // create servo object to control a servo
+Direction_servo_motor FRONT = {"front", 120};
+Direction_servo_motor TO_RIGHT = {"right", 30};
+Direction_servo_motor TO_LEFT = {"left", 210};
 
-int IN1 = 12;
+Servo myservo;
+
+/*int IN1 = 12;
 int IN2 = 11;
 int IN3 = 10;
 int IN4 = 2;
 int ENA = 13;
-int ENB = 8;
+int ENB = 8;*/
 
-int pos = 0;                                // variable to store the servo position
+int trigPin = 9;
+int echoPin = 10;
 
-int trigPin = 7;                            // TRIG pin
-int echoPin = 6;                            // ECHO pin
 float duration_us, distance_cm;
 float left_distance, right_distance;
 
 int car_state = STOP;
+Direction_servo_motor servo_state = FRONT;
 
 int nb_measure = 10;
-long measure;
 
 void setup() {
-    int ENB  = OUTPUT;
-    int IN4 = OUTPUT;
-    int IN3 = OUTPUT;
-    int IN2 = OUTPUT;
-    int IN1 = OUTPUT;
-    int ENA = OUTPUT;
+    Serial.begin(9600);
 
-    Serial.begin (9600);                    // begin serial port
-    pinMode(trigPin, OUTPUT);               // configure the trigger pin to output mode
-    pinMode(echoPin, INPUT);                // configure the echo pin to input mode
+    /*pinMode(ENB, OUTPUT);
+    pinMode(IN4, OUTPUT);
+    pinMode(IN3, OUTPUT);
+    pinMode(IN2, OUTPUT);
+    pinMode(IN1, OUTPUT);
+    pinMode(ENA, OUTPUT);*/
 
-    myservo.attach(9);                      // attaches the servo on pin 9 to the servo object
-    myservo.write(FRONT);                   // tell servo to go to position in variable 'pos'
+    pinMode(trigPin, OUTPUT);
+    pinMode(echoPin, INPUT);
+
+    myservo.attach(11);
+    myservo.write(servo_state.angle);
 }
 
-void loop() {
+long measure_distance(int nb_measure, const char* direction) {
+    long total_measure = 0;
 
+    for (int i = 0; i < nb_measure; i++) {
+        digitalWrite(trigPin, LOW);
+        delayMicroseconds(2);
+        digitalWrite(trigPin, HIGH);
+        delayMicroseconds(10);
+        digitalWrite(trigPin, LOW);
+
+        long duration = pulseIn(echoPin, HIGH, 30000);
+        total_measure += duration;
+        delay(100);
+    }
+
+    if (total_measure == 0) {
+        Serial.print("Error: no signal for ");
+        Serial.println(direction);
+        return 0;
+    }
+
+    duration_us = total_measure / nb_measure;
+    long distance = 0.0171 * duration_us;
+
+    Serial.print("Distance ");
+    Serial.print(direction);
+    Serial.print(": ");
+    Serial.print(distance);
+    Serial.println(" cm");
+
+    return distance;
+}
+
+
+void loop() {
+    float distance = measure_distance(nb_measure/5, servo_state.name);
 }
