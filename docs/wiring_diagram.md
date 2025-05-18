@@ -20,9 +20,9 @@ This document explains how to wire the components of the Arduino Robot.
 
 | Component        | Arduino Pin     | Notes                         |
 |------------------|------------------|-------------------------------|
-| Ultrasonic Trigger | 7               | Digital Output                |
-| Ultrasonic Echo    | 6               | Digital Input                 |
-| Servo Motor        | 9               | PWM Output                    |
+| Ultrasonic Trigger | 9               | Digital Output                |
+| Ultrasonic Echo    | 10              | Digital Input                 |
+| Servo Motor        | 11              | PWM Output                    |
 | Motor Driver IN1   | 12              | Motor A                       |
 | Motor Driver IN2   | 11              | Motor A                       |
 | Motor Driver IN3   | 10              | Motor B                       |
