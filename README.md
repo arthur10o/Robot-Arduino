@@ -3,7 +3,7 @@
 This project implements an intelligent robot capable of navigating autonomously or being manually controlled. It uses sensors to detect obstacles and motors to move in different directions.
 
 ## 🚀 Features
-- 
+- Continuous front-facing obstacle detection using an ultrasonic sensor
 
 ## 🧰 Equipment Required
 - Arduino Uno R3
