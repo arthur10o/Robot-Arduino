@@ -109,7 +109,7 @@ long measure_distance_left_right(int nb_measure) {
     return measure;
 }
 
-void print_distance(String side, float distance, int time = 2000) {
+void print_distance(String side, float distance, int time) {
     // Function to display the distance between the robot and an obstacle
     Serial.print(side + "distance : ");
     Serial.print(distance);
@@ -155,7 +155,7 @@ void loop() {
 
         right_distance = 0.0171 * duration_us;// calculate the distance on the right
 
-        print_distance("right", right_distance, 2000);
+        print_distance("right", right_distance, 200);
 
         myservo.write(TO_LEFT);              // directs the servo motor on the left
         delay(1000);
@@ -165,7 +165,7 @@ void loop() {
 
         left_distance = 0.0171 * duration_us; // calculate the distance on the left
         
-        print_distance("left", left_distance, 2000);
+        print_distance("left", left_distance, 200);
 
         if (left_distance > right_distance) {
             // Turn left if distance between obstacle and robot is greater on the left than on the right
