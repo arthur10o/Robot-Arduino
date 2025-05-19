@@ -21,8 +21,11 @@ int echoPin = 10;
 int nb_measure = 10;
 int minimum_distance = 40;          // distance in cm at which robot must stop
 
-float left_distance, right_distance;
-float slight_left_distance, slight_right_distance;
+long left_distance, right_distance;
+long slight_left_distance, slight_right_distance;
+
+long quickselect(long arr[], int left, int right, int k);
+int partition(long arr[], int left, int right);
 
 struct Car_state {
     int last_moove;
@@ -49,17 +52,7 @@ Direction_servo_motor direction_to_check[] = {
     SLIGHT_RIGHT,
     FRONT,
     SLIGHT_LEFT,
-    SLIGHT_MIDLE_RIGHT,
-    SLIGHT_MIDLE_LEFT,
-    FRONT,
-    TO_RIGHT,
-    SLIGHT_RIGHT,
-    SLIGHT_MIDLE_RIGHT,
-    FRONT,
-    TO_LEFT,
-    SLIGHT_LEFT,
-    SLIGHT_MIDLE_LEFT,
-    FRONT
+    SLIGHT_MIDLE_RIGHT
 };
 
 const int nb_direction = sizeof(direction_to_check) / sizeof(direction_to_check[0]);
@@ -86,27 +79,21 @@ long measure_distance(int nb_measure, const char* direction) {
         digitalWrite(trigPin, LOW);
 
         long duration = pulseIn(echoPin, HIGH, 25000);
-        measures[i] = 0.0171 * duration;
-    }
-
-    for (int i = 0; i < count - 1; i++) {
-        for (int j = 0; j < count - i - 1; j++) {
-            if (measures[j] > measures[j + 1]) {
-                long temp = measures[j];
-                measures[j] = measures[j + 1];
-                measures[j + 1] = temp;
-                for (int k = 0; k < count; k++) {
-                }
-            }
+        if(duration == 0) {
+            measures[i] = 999;
+        } else {
+            measures[i] = 0.0171 * duration;
         }
     }
-
+    
     long median;
 
     if (count % 2 == 0) {
-        median = (measures[count/2 - 1] + measures[count/2]) / 2;
+        long m1 = quickselect(measures, 0, count - 1, count / 2);
+        long m2 = quickselect(measures, 0, count - 1, count / 2 - 1);
+        median = (m1 + m2) / 2;
     } else {
-        median = measures[count/2];
+        median = quickselect(measures, 0, count - 1, count / 2);
     }
 
     if (median == 0) {
@@ -117,12 +104,38 @@ long measure_distance(int nb_measure, const char* direction) {
 
     Serial.print("Distance ");
     Serial.print(direction);
-    Serial.print(": ");
+    Serial.print(": ");                             // DEBUG
     Serial.print(median);
     Serial.println(" cm");
 
     return median;
 }
+
+int partition(long arr[], int left, int right) {
+    long pivot = arr[right];
+    int i = left;
+    for (int j = left; j < right; j++) {
+        if (arr[j] < pivot) {
+            long tmp = arr[i];
+            arr[i] = arr[j];
+            arr[j] = tmp;
+            i++;
+        }
+    }
+    long tmp = arr[i];
+    arr[i] = arr[right];
+    arr[right] = tmp;
+    return i;
+}
+
+long quickselect(long arr[], int left, int right, int k) {
+    if (left == right) return arr[left];
+    int pivotIndex = partition(arr, left, right);
+    if (k == pivotIndex) return arr[k];
+    else if (k < pivotIndex) return quickselect(arr, left, pivotIndex - 1, k);
+    else return quickselect(arr, pivotIndex + 1, right, k);
+}
+
 
 void stopp() {
     /**
@@ -205,10 +218,10 @@ void loop() {
     if(car_state.last_moove == ADVANCE) {
         advance();
 
-        for (int i = 0; i < sizeof(direction_to_check) / sizeof(direction_to_check[0]); i++) {
+        for (int i = 0; i < nb_direction; i++) {
             servo_state = direction_to_check[i];
             myservo.write(servo_state.angle);
-            delay(300);
+            delay(150);
 
             distance[i] = measure_distance(nb_measure / 5, servo_state.name);
 
@@ -231,7 +244,7 @@ void loop() {
             SLIGHT_RIGHT
         };
 
-        float* distances_target[] = {
+        long* distances_target[] = {
             &left_distance,
             &left_distance,
             &right_distance,
@@ -242,12 +255,12 @@ void loop() {
         for (int i = 0; i < 5; i++) {
             servo_state = direction_verify_obstacle[i];
             myservo.write(servo_state.angle);
-            delay(400);
+            delay(150);
 
             *distances_target[i] = measure_distance(nb_measure, servo_state.name);
         }
 
-        float max_dist = max(max(left_distance, right_distance), max(slight_left_distance, slight_right_distance));
+        long max_dist = max(max(left_distance, right_distance), max(slight_left_distance, slight_right_distance));
 
         if (max_dist > minimum_distance) {
             if (max_dist == left_distance) turn_left(255);
