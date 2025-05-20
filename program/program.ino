@@ -22,9 +22,8 @@ int nb_measure = 10;
 int minimum_distance = 60;          // distance in cm at which robot must stop
 
 long left_distance, right_distance;
-
-unsigned long lastMillis = 0;
-const long interval = 150;         // Waiting time in ms between distance measurements.
+long slight_midle_left_distance, slight_midle_right_distance;
+long slight_left_distance, slight_right_distance;
 
 long quickselect(long arr[], int left, int right, int k);
 int partition(long arr[], int left, int right);
@@ -42,15 +41,22 @@ struct Direction_servo_motor {
 };
 
 Direction_servo_motor FRONT = {"front", 120};
-Direction_servo_motor TO_RIGHT = {"right", 115};
-Direction_servo_motor TO_LEFT = {"left", 125};
+Direction_servo_motor TO_RIGHT = {"right", 75};
+Direction_servo_motor TO_LEFT = {"left", 210};
+Direction_servo_motor SLIGHT_MIDLE_LEFT = {"slight_midle_left", 125};
+Direction_servo_motor SLIGHT_MIDLE_RIGHT = {"slight_midle_right", 115};
+Direction_servo_motor SLIGHT_LEFT = {"slight_left", 142};
+Direction_servo_motor SLIGHT_RIGHT = {"slight_right", 98};
 Direction_servo_motor servo_state = FRONT;
 
 Direction_servo_motor direction_to_check[] = {
     TO_RIGHT,
+    SLIGHT_RIGHT,
+    SLIGHT_MIDLE_RIGHT,
     FRONT,
-    TO_LEFT,
-    FRONT,
+    SLIGHT_MIDLE_LEFT,
+    SLIGHT_LEFT,
+    TO_LEFT
 };
 
 const int nb_direction = sizeof(direction_to_check) / sizeof(direction_to_check[0]);
@@ -158,6 +164,13 @@ long quickselect(long arr[], int left, int right, int k) {
 }
 
 long get_cached_distance(int angle) {
+    /**
+    * Retrieves a previously measured and cached distance for a given servo angle.
+    * This helps avoid redundant ultrasonic measurements during a scan.
+    *
+    * @param angle Servo angle for which to retrieve the distance.
+    * @return Cached distance in centimeters if found; -1 otherwise.
+    */
     for (int i = 0; i < cached_count; i++) {
         if (cached_angles[i] == angle) {
             return cached_distances[i];
@@ -167,6 +180,13 @@ long get_cached_distance(int angle) {
 }
 
 void add_cached_distance(int angle, long distance) {
+    /**
+    * Stores a new angle-distance pair into the cache to avoid remeasuring.
+    * The cache has a limited size and does not overwrite old values.
+    *
+    * @param angle    Servo angle to cache.
+    * @param distance Distance measured at that angle.
+    */
     if (cached_count < MAX_CACHED_ANGLES) {
         cached_angles[cached_count] = angle;
         cached_distances[cached_count] = distance;
@@ -196,6 +216,22 @@ void advance() {
     digitalWrite(IN4, LOW);
     analogWrite(ENB, 130);
     Serial.println("advance");
+}
+
+void backward(int time = 500) {
+    /**
+    * Moves the robot backwards for a given time.
+    * @param time Time in milliseconds
+    */
+    digitalWrite(IN1, LOW);
+    digitalWrite(IN2, HIGH);
+    analogWrite(ENA, 130);
+    digitalWrite(IN3, LOW);
+    digitalWrite(IN4, HIGH);
+    analogWrite(ENB, 130);
+    delay(time);
+    stopp();
+    Serial.println("backward");
 }
 
 void turn_right(int time) {
@@ -279,7 +315,7 @@ void loop() {
 
             distance[i] = cached;
 
-            if (distance[i] <= minimum_distance || distance[i] >= 300) {
+            if (distance[i] <= minimum_distance || distance[i] >= 300 || distance[i] == 0) {
                 obstacle_detected = true;
                 break;
             }
@@ -295,11 +331,10 @@ void loop() {
 
         car_state.last_moove = STOP;
 
-        for (int i = 0; i < sizeof(direction_to_check) / sizeof(direction_to_check[0]); i++) {
+        for (int i = 0; i < nb_direction; i++) {
             servo_state = direction_to_check[i];
             myservo.write(servo_state.angle);
             servo_state.last_position = servo_state.angle;
-            delay(150);
 
             long cached = get_cached_distance(servo_state.angle);
             if (cached == -1) {
@@ -310,15 +345,27 @@ void loop() {
             distance[i] = cached;
         }
 
-        long max_dist = max(left_distance, right_distance);
+        right_distance = distance[0];
+        slight_right_distance = distance[1];
+        slight_midle_right_distance = distance[2];
+        slight_midle_left_distance = distance[4];
+        slight_left_distance = distance[5];
+        left_distance = distance[6];
+
+        long max_dist = max(max(left_distance, right_distance), max(slight_midle_left_distance, slight_midle_right_distance));
 
         if (max_dist > minimum_distance) {
             if (max_dist == left_distance) turn_left(255);
+            else if(max_dist == slight_left_distance) turn_left(75);
+            else if(max_dist == slight_midle_left_distance) turn_left(120);
             else if (max_dist == right_distance) turn_right(255);
+            else if(max_dist == slight_midle_right_distance) turn_right(120);
+            else if(max_dist == slight_right_distance) turn_right(75);
             car_state.last_moove = ADVANCE;
         } else {
-            Serial.println("Area blocked !");
+            Serial.println("Area blocked! Trying to back up...");
             stopp();
+            backward(500);
             car_state.last_moove = STOP;
             cached_count = 0;
         }
