@@ -1,196 +1,147 @@
 #include <Servo.h>
 #include <IRremote.h>
 
-#define STOP 0
-#define ADVANCE 1
-#define TURN_RIGHT 2
-#define TURN_LEFT 3
+// ============================= PIN CONFIGURATION ============================= //
 
-Servo myservo;
+const int IN1 = 6;
+const int IN2 = 7;
+const int IN3 = 12;
+const int IN4 = 13;
+const int ENA = 5;
+const int ENB = 2;
 
-int IN1 = 6;
-int IN2 = 7;
-int IN3 = 12;
-int IN4 = 13;
-int ENA = 5;
-int ENB = 2;
+const int TRIG_PIN = 9;
+const int ECHO_PIN = 10;
 
-int trigPin = 9;
-int echoPin = 10;
+// ============================= DEFINITION OF CAR STATES ============================= //
 
-int nb_measure = 10;
-int minimum_distance = 60;          // distance in cm at which robot must stop
-
-long left_distance, right_distance;
-long slight_midle_left_distance, slight_midle_right_distance;
-long slight_left_distance, slight_right_distance;
-
-long quickselect(long arr[], int left, int right, int k);
-int partition(long arr[], int left, int right);
-
-struct Car_state {
-    int last_moove;
+enum CarDirection {
+    STOP = 0,
+    ADVANCE = 1,
+    BACKWARD = -1,
+    TURN_RIGHT = 2,
+    TURN_LEFT = 3
 };
 
-Car_state car_state;
+// ============================= DATA STRUCTURES ============================= //
 
-struct Direction_servo_motor {
+struct WheelState {
+    int speed;              // speed in percentage from 0 to 255
+    int direction;          // 1 = forward, -1 = backward, 0 = stop
+};
+
+struct CarState {
+    int car_direction;      // Global direction of the car (STOP, ADVANCE, TURN LEFT, TURN RIGHT)
+    int time_direction;     // Time duration for the current direction
+    WheelState left;
+    WheelState right;
+};
+
+struct DirectionServoMotor {
     const char* name;
     int angle;
     int last_position;
 };
 
-Direction_servo_motor FRONT = {"front", 120};
-Direction_servo_motor TO_RIGHT = {"right", 75};
-Direction_servo_motor TO_LEFT = {"left", 210};
-Direction_servo_motor SLIGHT_MIDLE_LEFT = {"slight_midle_left", 125};
-Direction_servo_motor SLIGHT_MIDLE_RIGHT = {"slight_midle_right", 115};
-Direction_servo_motor SLIGHT_LEFT = {"slight_left", 142};
-Direction_servo_motor SLIGHT_RIGHT = {"slight_right", 98};
-Direction_servo_motor servo_state = FRONT;
+struct ServoMotor {
+    DirectionServoMotor current_servo_state;
+    long left_distance, right_distance;
+    long slight_midle_left_distance, slight_midle_right_distance;
+    long slight_left_distance, slight_right_distance;
+};
 
-Direction_servo_motor direction_to_check[] = {
-    TO_RIGHT,
+// ============================= OBJECTS AND GLOBAL VARIABLES ============================= //
+
+Servo my_servo;
+ServoMotor my_servo_motor;
+CarState car_state;
+
+const DirectionServoMotor FRONT = {"front", 120};
+const DirectionServoMotor RIGHT = {"right", 50};
+const DirectionServoMotor LEFT = {"left", 190};
+const DirectionServoMotor SLIGHT_MIDLE_LEFT = {"slight_midle_left", 133};
+const DirectionServoMotor SLIGHT_MIDLE_RIGHT = {"slight_midle_right", 96};
+const DirectionServoMotor SLIGHT_LEFT = {"slight_left", 166};
+const DirectionServoMotor SLIGHT_RIGHT = {"slight_right", 73};
+
+const DirectionServoMotor SERVO_MOTOR_DIRECTIONS[] = {
+    RIGHT,
     SLIGHT_RIGHT,
     SLIGHT_MIDLE_RIGHT,
     FRONT,
     SLIGHT_MIDLE_LEFT,
     SLIGHT_LEFT,
-    TO_LEFT
+    LEFT
 };
 
-const int nb_direction = sizeof(direction_to_check) / sizeof(direction_to_check[0]);
-int distance[nb_direction];
+const int direction_number = sizeof(SERVO_MOTOR_DIRECTIONS) / sizeof(SERVO_MOTOR_DIRECTIONS[0]);
+int list_of_distances[direction_number];
+
+int measure_number = 10;
+int minimum_distance = 60;          // distance in cm at which robot must stop
 
 const int MAX_CACHED_ANGLES = 10;
 int cached_angles[MAX_CACHED_ANGLES];
 long cached_distances[MAX_CACHED_ANGLES];
 int cached_count = 0;
 
-long measure_distance(int nb_measure, const char* direction) {
+float kalman_filter_estimate = 0;
+float estimate_covariance = 1;
+float process_noise = 0.1;
+float measurement_noise = 1.0;
+
+// ============================= UTILITY FUNCTIONS ============================= //
+
+void set_wheel_state(WheelState &_wheel, int _speed, int _direction) {
     /**
-    * Measures the distance between the robot and an obstacle using an ultrasonic sensor.
-    * The function performs multiple measurements and returns the average value.
-    * 
-    * @param nb_measure Number of individual distance measurements to average.
-    * @param direction  Direction label.
-    * @return median in centimeters (as a long integer).
+    * Sets the speed and direction of a wheel.
+    * @param _wheel : Reference to the WheelState object to update.
+    * @param _speed : Speed value to set.
+    * @param _direction : Direction value to set.
     */
-    long measures[20];
-    int count = min(nb_measure, 20);
-
-    for (int i = 0; i < count; i++) {
-        digitalWrite(trigPin, LOW);
-        delayMicroseconds(2);
-        digitalWrite(trigPin, HIGH);
-        delayMicroseconds(10);
-        digitalWrite(trigPin, LOW);
-
-        long duration = pulseIn(echoPin, HIGH, 25000);
-        if(duration == 0) {
-            measures[i] = 999;
-        } else {
-            measures[i] = 0.0171 * duration;
-        }
-    }
-    
-    long median;
-
-    if (count % 2 == 0) {
-        long m1 = quickselect(measures, 0, count - 1, count / 2);
-        long m2 = quickselect(measures, 0, count - 1, count / 2 - 1);
-        median = (m1 + m2) / 2;
-    } else {
-        median = quickselect(measures, 0, count - 1, count / 2);
-    }
-
-    if (median == 0) {
-        Serial.print("Error: no signal for ");
-        Serial.println(direction);
-        return 0;
-    }
-
-    /*Serial.print("Distance ");
-    Serial.print(direction);
-    Serial.print(": ");                             // DEBUG
-    Serial.print(median);
-    Serial.println(" cm");*/
-
-    return median;
+    _wheel.speed = _speed;
+    _wheel.direction = _direction;
 }
 
-int partition(long arr[], int left, int right) {
+void set_car_speed(int _speed_left, int _speed_right) {
     /**
-    * Partitions an array around a pivot for use in the quickselect algorithm.
-    * Elements smaller than the pivot are moved to the left, and larger to the right.
-    *
-    * @param arr   The array to partition.
-    * @param left  Starting index of the subarray.
-    * @param right Ending index of the subarray (pivot element).
-    * @return The index position of the pivot after partitioning.
+    * Sets the speed of the car by updating the speed of each wheel.
+    * @param _speed_left : Speed for the left wheel.
+    * @param _speed_right : Speed for the right wheel.
     */
-    long pivot = arr[right];
-    int i = left;
-    for (int j = left; j < right; j++) {
-        if (arr[j] < pivot) {
-            long tmp = arr[i];
-            arr[i] = arr[j];
-            arr[j] = tmp;
-            i++;
-        }
-    }
-    long tmp = arr[i];
-    arr[i] = arr[right];
-    arr[right] = tmp;
-    return i;
+    set_wheel_state(car_state.left, _speed_left, car_state.left.direction);
+    set_wheel_state(car_state.right, _speed_right, car_state.right.direction);
 }
 
-long quickselect(long arr[], int left, int right, int k) {
+void set_car_direction(int _left_direction, int _right_direction, int _direction, int _time) {
     /**
-    * Selects the k-th smallest element from the array using the Quickselect algorithm.
-    * This is used for efficiently finding the median in unsorted data.
-    *
-    * @param arr   The array to search.
-    * @param left  Starting index of the subarray.
-    * @param right Ending index of the subarray.
-    * @param k     The index (0-based) of the desired smallest element.
-    * @return The k-th smallest element in the array.
+    * Sets the overall direction of the car and updates both wheels accordingly.
+    * @param _left_direction : The new direction for the left wheel.
+    * @param _right_direction : The new direction for the right wheel.
+    * @param _direction : The new direction for the car.
+    * @param _time : Duration for which the car should maintain this direction.
     */
-    if (left == right) return arr[left];
-    int pivotIndex = partition(arr, left, right);
-    if (k == pivotIndex) return arr[k];
-    else if (k < pivotIndex) return quickselect(arr, left, pivotIndex - 1, k);
-    else return quickselect(arr, pivotIndex + 1, right, k);
+    car_state.car_direction = _direction;
+    car_state.time_direction = _time;
+    set_wheel_state(car_state.left, car_state.left.speed, _left_direction);
+    set_wheel_state(car_state.right, car_state.right.speed, _right_direction);
 }
 
-long get_cached_distance(int angle) {
+void move_car() {
     /**
-    * Retrieves a previously measured and cached distance for a given servo angle.
-    * This helps avoid redundant ultrasonic measurements during a scan.
-    *
-    * @param angle Servo angle for which to retrieve the distance.
-    * @return Cached distance in centimeters if found; -1 otherwise.
+    * Executes the movement of the car based on its current direction state.
+    * Calls the appropriate movement function (advance, stop, turn left/right, backward).
     */
-    for (int i = 0; i < cached_count; i++) {
-        if (cached_angles[i] == angle) {
-            return cached_distances[i];
-        }
-    }
-    return -1;
-}
-
-void add_cached_distance(int angle, long distance) {
-    /**
-    * Stores a new angle-distance pair into the cache to avoid remeasuring.
-    * The cache has a limited size and does not overwrite old values.
-    *
-    * @param angle    Servo angle to cache.
-    * @param distance Distance measured at that angle.
-    */
-    if (cached_count < MAX_CACHED_ANGLES) {
-        cached_angles[cached_count] = angle;
-        cached_distances[cached_count] = distance;
-        cached_count++;
+    if (car_state.car_direction == ADVANCE) {
+        advance(car_state.left.speed, car_state.right.speed);
+    } else if (car_state.car_direction == STOP) {
+        stopp();
+    } else if (car_state.car_direction == BACKWARD) {
+        backward(car_state.left.speed, car_state.right.speed);
+    } else if (car_state.car_direction == TURN_LEFT) {
+        turn_left(car_state.time_direction, car_state.left.speed, car_state.right.speed);
+    } else if (car_state.car_direction == TURN_RIGHT) {
+        turn_right(car_state.time_direction, car_state.left.speed, car_state.right.speed);
     }
 }
 
@@ -202,73 +153,234 @@ void stopp() {
     digitalWrite(IN2, HIGH);
     digitalWrite(IN3, HIGH);
     digitalWrite(IN4, HIGH);
-    Serial.println("stop");
+    Serial.println("STOP");
 }
 
-void advance() {
+void advance(int _left_speed, int _right_speed) {
     /**
-    * Moves the robot forward by activating both motors in forward direction.
+    * Moves the robot forward by activing both motors in forward direction.
+    * @param _left_speed : Speed for the left motor (0-255).
+    * @param _right_speed : Speed for the right motor (0-255).
     */
     digitalWrite(IN1, HIGH);
     digitalWrite(IN2, LOW);
-    analogWrite(ENA, 130);
+    analogWrite(ENA, _left_speed);
     digitalWrite(IN3, HIGH);
     digitalWrite(IN4, LOW);
-    analogWrite(ENB, 130);
-    Serial.println("advance");
+    analogWrite(ENB, _right_speed);
+    Serial.println("ADVANCE");
 }
 
-void backward(int time = 500) {
+void backward(int _left_speed, int _right_speed) {
     /**
     * Moves the robot backwards for a given time.
-    * @param time Time in milliseconds
+    * @param _left_speed : Speed for the left motor (0-255).
+    * @param _right_speed : Speed for the right motor (0-255).
     */
     digitalWrite(IN1, LOW);
     digitalWrite(IN2, HIGH);
-    analogWrite(ENA, 130);
+    analogWrite(ENA, _left_speed);
     digitalWrite(IN3, LOW);
     digitalWrite(IN4, HIGH);
-    analogWrite(ENB, 130);
-    delay(time);
+    analogWrite(ENB, _right_speed);
     stopp();
-    Serial.println("backward");
+    Serial.println("BACKWARD");
 }
 
-void turn_right(int time) {
+void turn_right(int _time, int _left_speed, int _right_speed) {
     /**
     * Rotates the robot to the right by running the motors in opposite directions.
     * A short delay is used to complete the turn before stopping.
-    * @param time Rotation time in milliseconds. The higher the value, the longer the robot rotates.
+    * @param _time : Rotation time in milliseconds. The higher the value, the longer the robot rotates.
+    * @param _left_speed : Speed for the left motor (0-255).
+    * @param _right_speed : Speed for the right motor (0-255).
     */
     digitalWrite(IN1, LOW);
     digitalWrite(IN2, HIGH);
-    analogWrite(ENA, 130);
+    analogWrite(ENA, _left_speed);
     digitalWrite(IN3, HIGH);
     digitalWrite(IN4, LOW);
-    analogWrite(ENB, 130);
-    delay(time);
-    Serial.println("turn right");
+    analogWrite(ENB, _right_speed);
+    delay(_time);
+    Serial.println("TURN RIGHT");
     stopp();
 }
 
-void turn_left(int time) {
+void turn_left(int _time, int _left_speed, int _right_speed) {
     /**
     * Rotates the robot to the left by running the motors in opposite directions.
     * A short delay is used to complete the turn before stopping.
-    * @param time Rotation time in milliseconds. The higher the value, the longer the robot rotates.
+    * @param _time : Rotation time in milliseconds. The higher the value, the longer the robot rotates.
+    * @param _left_speed : Speed for the left motor (0-255).
+    * @param _right_speed : Speed for the right motor (0-255).
     */
     digitalWrite(IN1, HIGH);
     digitalWrite(IN2, LOW);
-    analogWrite(ENA, 130);
+    analogWrite(ENA, _left_speed);
     digitalWrite(IN3, LOW);
     digitalWrite(IN4, HIGH);
-    analogWrite(ENB, 130);
-    delay(time);
-    Serial.println("turn left");
+    analogWrite(ENB, _right_speed);
+    delay(_time);
+    Serial.println("TURN LEFT");
     stopp();
 }
 
-void setup() {
+float kalman_filter(float _measurement) {
+    /**
+    * Applies a Kalman filter to smooth out the distance measurements from the ultrasonic sensor.
+    * This helps reduce noise and improve accuracy of the readings.
+    * @param _measurement : The raw distance measurement from the sensor.
+    * @return The filtered distance estimate.
+    */
+    float prediction_estimate = kalman_filter_estimate;
+    float kalman_gain = estimate_covariance / (estimate_covariance + measurement_noise);
+    kalman_filter_estimate = prediction_estimate + kalman_gain * (_measurement - prediction_estimate);
+    estimate_covariance = (1 - kalman_gain) * estimate_covariance + process_noise;
+    return kalman_filter_estimate;
+}
+
+long quick_select(long _array[], int _left, int _right, int _k) {
+    /**
+    * Selects the k-th smallest element from the array using the Quickselect algorithm.
+    * This is used for efficiently finding the median in unsorted data.
+    *
+    * @param _array : The array to search.
+    * @param _left : Starting index of the subarray.
+    * @param _right : Ending index of the subarray.
+    * @param _k : The index (0-based) of the desired smallest element.
+    * @return The k-th smallest element in the array.
+    */
+    if (_left == _right) return _array[_left];
+    int pivot_index = partition(_array, _left, _right);
+    if (_k == pivot_index) return _array[_k];
+    else if (_k < pivot_index) return quick_select(_array, _left, pivot_index - 1, _k);
+    else return quick_select(_array, pivot_index + 1, _right,  _k);
+}
+
+static int partition(long _array[], int _left, int _right) {
+    /**
+    * Partitions an array around a pivot for use in the quickselect algorithm.chached_count
+    * Elements smaller than the pivot are moved to the left, and larger to the right.
+    *
+    * @param _array : The array to partition.
+    * @param _left  : Starting index of the subarray.
+    * @param _right : Ending index of the subarray (pivot element).
+    * @return The index position of the pivot after partitioning.
+    */
+    long pivot = _array[_right];
+    int i = _left;
+    for (int j = _left; j < _right; j++) {
+        if (_array[j] <= pivot) {
+            long temp = _array[i];
+            _array[i] = _array[j];
+            _array[j] = temp;
+            i++;
+        }
+    }
+    long temp = _array[i];
+    _array[i] = _array[_right];
+    _array[_right] = temp;
+    return i;
+}
+
+long measures_distance(int _measure_number, const char* _direction) {
+    /**
+    * Measure the distance between the robot and an obstacle using an ultrasonic sensor.
+    * The function performs multiple measurements and returns the average value.
+    *
+    * @param _measure_number : Number of individual distance measurements to average.
+    * @param _direction : Direction label.
+    * @return median in centimeters (as a long integer).
+    */
+    long measures[_measure_number];
+    for (int i = 0; i < _measure_number; i++) {
+        digitalWrite(TRIG_PIN, LOW);
+        delayMicroseconds(2);
+        digitalWrite(TRIG_PIN, HIGH);
+        delayMicroseconds(10);
+        digitalWrite(TRIG_PIN, LOW);
+
+        long duration = pulseIn(ECHO_PIN, HIGH, 25000);
+        if (duration == 0) measures[i] = 999;
+        else measures[i] = 0.0171 * duration;
+    }
+
+    long median;
+
+    if (_measure_number % 2 == 0) {
+        long first_median = quick_select(measures, 0, _measure_number - 1, _measure_number / 2);
+        long second_median = quick_select(measures, 0, _measure_number - 1, _measure_number / 2 - 1);
+        median = (first_median + second_median) / 2;
+    } else {
+        median = quick_select(measures, 0, _measure_number - 1, _measure_number / 2);
+    }
+
+    if (median == 0) {
+        Serial.print("Error: no signal for ");
+        Serial.println(_direction);
+        return 0;
+    }
+
+    return median;
+}
+
+void update_direction_based_on_distance() {
+    /**
+    * Updates the car's movement direction based on the distance measured in the current servo direction.
+    * If an obstacle is detected within the minimum distance, the car stops; otherwise, it continues to advance.
+    */
+    long distance = measures_distance(measure_number, my_servo_motor.current_servo_state.name);
+    distance = kalman_filter(distance);
+    Serial.print("Distance at ");
+    Serial.print(my_servo_motor.current_servo_state.name);
+    Serial.print(": ");
+    Serial.println(distance);
+    if (distance <= minimum_distance) {
+        Serial.println("Obstacle detected! Stopping the car.");
+        car_state.car_direction = STOP;
+        move_car();
+
+    } else {
+        Serial.println("Path clear. Continuing to advance.");
+        car_state.car_direction = ADVANCE;
+        car_state.left.speed = 200;
+        car_state.right.speed = 200;
+        move_car();
+    }
+}
+
+void add_cached_distance(int _angle, long _distance) {
+    /**
+    * Stores a new angle-distance pair into the cache to avoid remeasuring.
+    * The cache has a limited size and does not overwrite old values.
+    *
+    * @param _angle : Servo angle to cache.
+    * @param _distance : Distance measured at that angle.
+    */
+    if (cached_count < MAX_CACHED_ANGLES) {
+        cached_angles[cached_count] = _angle;
+        cached_distances[cached_count] = _distance;
+        cached_count++;
+    }
+}
+
+long get_cached_distance(int _angle) {
+    /**
+    * Retrieves a previously measured and cached distance for a given servo angle.
+    * This helps avoid redundant ultrasonic measurements during a scan.
+    *
+    * @param _angle : Servo angle for which to retrieve the distance.
+    * @return Cached distance in centimeters if found; -1 otherwise.
+    */
+    for (int i = 0; i < cached_count; i++) {
+        if (cached_angles[i] == _angle) {
+            return cached_distances[i];
+        }
+    }
+    return -1;
+}
+
+void setup() { 
     /**
     * Initializes the robot's hardware configuration.
     * Sets up pins, attaches the servo motor, and defines initial movement state.
@@ -282,15 +394,20 @@ void setup() {
     pinMode(IN1, OUTPUT);
     pinMode(ENA, OUTPUT);
 
-    pinMode(trigPin, OUTPUT);
-    pinMode(echoPin, INPUT);
+    pinMode(TRIG_PIN, OUTPUT);
+    pinMode(ECHO_PIN, INPUT);
 
-    myservo.attach(11);
-    myservo.write(servo_state.angle);
+    my_servo_motor.current_servo_state = FRONT;
 
-    car_state.last_moove = STOP;
+    my_servo.attach(11);
+    my_servo.write(my_servo_motor.current_servo_state.angle);
+
+    car_state.car_direction = STOP;
+
     delay(1000);
 }
+
+// ============================= MAIN FUNCTION ============================= //
 
 void loop() {
     /**
@@ -298,76 +415,75 @@ void loop() {
     * If moving forward, constantly checks distances to obstacles.
     * If stopped, scans surroundings and chooses a direction with the most space to resume movement.
     */
-    if(car_state.last_moove == ADVANCE) {
+    update_direction_based_on_distance();
+    delay(150);
+    if (car_state.car_direction == ADVANCE) {
         bool obstacle_detected = false;
         cached_count = 0;
-        for (int i = 0; i < nb_direction; i++) {
-            servo_state = direction_to_check[i];
-            myservo.write(servo_state.angle);
-            servo_state.last_position = servo_state.angle;
-            delay(150);
+        for (int i = 0; i < direction_number; i++) {
+            my_servo_motor.current_servo_state = SERVO_MOTOR_DIRECTIONS[i];
+            my_servo.write(my_servo_motor.current_servo_state.angle);
+            my_servo_motor.current_servo_state.last_position = my_servo_motor.current_servo_state.angle;
+            delay(250);
 
-            long cached = get_cached_distance(servo_state.angle);
+            long cached = get_cached_distance(my_servo_motor.current_servo_state.angle);
             if (cached == -1) {
-                cached = measure_distance(nb_measure / 5, servo_state.name);
-                add_cached_distance(servo_state.angle, cached);
+                cached = measures_distance(measure_number / 5, my_servo_motor.current_servo_state.name);
+                cached = kalman_filter(cached);
+                add_cached_distance(my_servo_motor.current_servo_state.angle, cached);
             }
+            list_of_distances[i] = cached;
 
-            distance[i] = cached;
-
-            if (distance[i] <= minimum_distance || distance[i] >= 300 || distance[i] == 0) {
+            if (list_of_distances[i] <= minimum_distance || list_of_distances[i] >= 300 || list_of_distances[i] == 0) {
                 obstacle_detected = true;
                 break;
             }
         }
         if (obstacle_detected) {
-            car_state.last_moove = STOP;
-            stopp();
-        } else {
-            advance();
+            car_state.car_direction = STOP;
         }
-    } else if(car_state.last_moove == STOP) {
-        stopp();
+        move_car();
+   } else  if (car_state.car_direction == STOP) {
+        move_car();
+        car_state.car_direction = STOP;
 
-        car_state.last_moove = STOP;
+        for (int i = 0; i < direction_number; i++) {
+            my_servo_motor.current_servo_state = SERVO_MOTOR_DIRECTIONS[i];
+            my_servo.write(my_servo_motor.current_servo_state.angle);
+            my_servo_motor.current_servo_state.last_position = my_servo_motor.current_servo_state.angle;
 
-        for (int i = 0; i < nb_direction; i++) {
-            servo_state = direction_to_check[i];
-            myservo.write(servo_state.angle);
-            servo_state.last_position = servo_state.angle;
-
-            long cached = get_cached_distance(servo_state.angle);
+            long cached = get_cached_distance(my_servo_motor.current_servo_state.angle);
             if (cached == -1) {
-                cached = measure_distance(nb_measure, servo_state.name);
-                add_cached_distance(servo_state.angle, cached);
+                cached = measures_distance(measure_number, my_servo_motor.current_servo_state.name);
+                cached = kalman_filter(cached);
+                add_cached_distance(my_servo_motor.current_servo_state.angle, cached);
             }
-
-            distance[i] = cached;
+            list_of_distances[i] = cached;
         }
 
-        right_distance = distance[0];
-        slight_right_distance = distance[1];
-        slight_midle_right_distance = distance[2];
-        slight_midle_left_distance = distance[4];
-        slight_left_distance = distance[5];
-        left_distance = distance[6];
+        my_servo_motor.right_distance = list_of_distances[0];
+        my_servo_motor.slight_right_distance = list_of_distances[1];
+        my_servo_motor.slight_midle_right_distance = list_of_distances[2];
+        my_servo_motor.slight_left_distance = list_of_distances[5];
+        my_servo_motor.slight_midle_left_distance = list_of_distances[4];
+        my_servo_motor.left_distance = list_of_distances[6];
 
-        long max_dist = max(max(left_distance, right_distance), max(slight_midle_left_distance, slight_midle_right_distance));
-
-        if (max_dist > minimum_distance) {
-            if (max_dist == left_distance) turn_left(255);
-            else if(max_dist == slight_left_distance) turn_left(75);
-            else if(max_dist == slight_midle_left_distance) turn_left(120);
-            else if (max_dist == right_distance) turn_right(255);
-            else if(max_dist == slight_midle_right_distance) turn_right(120);
-            else if(max_dist == slight_right_distance) turn_right(75);
-            car_state.last_moove = ADVANCE;
+        long max_distance = max(max(my_servo_motor.left_distance, my_servo_motor.right_distance),
+                            max(max(my_servo_motor.slight_left_distance, my_servo_motor.slight_right_distance),
+                            max(my_servo_motor.slight_midle_left_distance, my_servo_motor.slight_midle_right_distance)));
+        
+        if (max_distance > minimum_distance) {
+            if (max_distance == my_servo_motor.left_distance) turn_left(car_state.time_direction, 255, 255);
+            else if (max_distance == my_servo_motor.slight_left_distance) turn_left(car_state.time_direction, 150, 150);
+            else if (max_distance == my_servo_motor.slight_midle_left_distance) turn_left(car_state.time_direction, 100, 100);
+            else if (max_distance == my_servo_motor.right_distance) turn_right(car_state.time_direction, 255, 255);
+            else if (max_distance == my_servo_motor.slight_right_distance) turn_right(car_state.time_direction, 150, 150);
+            else if (max_distance == my_servo_motor.slight_midle_right_distance) turn_right(car_state.time_direction, 100, 100);
+            car_state.car_direction = ADVANCE;
         } else {
-            Serial.println("Area blocked! Trying to back up...");
-            stopp();
-            backward(500);
-            car_state.last_moove = STOP;
+            car_state.car_direction = STOP;
             cached_count = 0;
         }
+        move_car();
     }
 }
